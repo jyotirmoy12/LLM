@@ -108,7 +108,6 @@ def eval_on_val(model, tok, val_texts, num_samples=50, device='cuda', pad_idx=0)
     
     print(f"\nSamples: {len(samp_texts)}")
     print(f"Perplexity: {avg_ppl:.2f}")
-    print(f"BLEU: {bleu_sc:.2f}")
     
     return {
         'avg_perplexity': avg_ppl,
@@ -121,9 +120,7 @@ def eval_on_val(model, tok, val_texts, num_samples=50, device='cuda', pad_idx=0)
 
 
 def gen_samp_outs(model, tok, val_texts, device='cuda'):
-    """Generate 5 sample outputs with diverse prompts using stochastic sampling"""
     
-    # Select 5 diverse texts
     diverse_texts = []
     seen_starts = set()
     
@@ -132,7 +129,6 @@ def gen_samp_outs(model, tok, val_texts, device='cuda'):
         if len(token_ids) < 10:
             continue
         
-        # Get first 3 tokens to check diversity
         start_key = tuple(token_ids[:3])
         
         if start_key not in seen_starts:
@@ -142,34 +138,24 @@ def gen_samp_outs(model, tok, val_texts, device='cuda'):
         if len(diverse_texts) >= 5:
             break
     
-    # If we don't have 5 diverse texts, just use first 5
     if len(diverse_texts) < 5:
         diverse_texts = [text for text in val_texts if len(tok.enc(text)) >= 10][:5]
     
-    print(f"\n{'='*100}")
-    print(f"{'':>40}SAMPLE GENERATIONS (STOCHASTIC)")
-    print(f"{'='*100}")
-    print(f"Note: Using first 5 tokens as prompt with stochastic sampling (temperature & top-k)")
-    print(f"{'='*100}\n")
+
     
     for i, text in enumerate(diverse_texts[:5]):
         token_ids = tok.enc(text)
         
         if len(token_ids) < 10:
             continue
-        
-        # Use EXACTLY first 5 tokens as prompt
+
         prompt_ids = token_ids[:5]
         prompt_text = tok.dec(prompt_ids)
         
-        print(f"\n{'-'*100}")
-        print(f"Sample {i+1}/5")
-        print(f"{'-'*100}")
-        print(f"Prompt (5 tokens): {prompt_text}")
+        print(f"Prompt : {prompt_text}")
         print(f"Ground Truth: {text[:150]}...")
-        print(f"\nStochastic Generations (Non-Deterministic):")
-        
-        # Generate with different stochastic strategies
+       
+
         strategies = [
             {'temp': 0.7, 'top_k': 50, 'desc': 'Conservative (temp=0.7, top_k=50)'},
             {'temp': 1.0, 'top_k': 40, 'desc': 'Balanced (temp=1.0, top_k=40)'},
@@ -223,9 +209,7 @@ def vis_all_hds_lyr(attn_wts, tokens, lyr_idx, save_dir):
 def analyze_attn_pats(model, tok, attn_samples, save_dir='visualizations', device='cuda'):
     Path(save_dir).mkdir(exist_ok=True, parents=True)
     
-    print(f"\n{'='*100}")
-    print(f"Analyzing attention patterns...")
-    print(f"{'='*100}\n")
+
     
     for idx, samp in enumerate(attn_samples):
         try:
@@ -242,9 +226,8 @@ def analyze_attn_pats(model, tok, attn_samples, save_dir='visualizations', devic
             for lyr_idx, lyr_attn in enumerate(attn_wts):
                 vis_all_hds_lyr(lyr_attn, tokens, lyr_idx, samp_dir)
             
-            print(f"  ✓ Attention visualizations saved for sample {idx + 1}")
         except Exception as e:
-            print(f"  ✗ Failed to visualize sample {idx + 1}: {e}")
+            print(f" Failed")
 
 
 def find_files():
@@ -288,13 +271,9 @@ def main():
     parser.add_argument('--skip_attention', action='store_true', help='Skip attention visualization')
     args = parser.parse_args()
     
-    print(f"\n{'='*100}")
-    print(f"{'':>42}MODEL TESTING")
-    print(f"{'='*100}\n")
-    
-    # Auto-find files if not provided
+
+
     if args.checkpoint is None or args.val_data is None or args.tokenizer is None:
-        print("Searching for required files...")
         model_path, data_path, tokenizer_path = find_files()
         
         args.checkpoint = args.checkpoint or model_path
@@ -302,26 +281,13 @@ def main():
         args.tokenizer = args.tokenizer or tokenizer_path
     
     if args.checkpoint is None or args.val_data is None or args.tokenizer is None:
-        print("\n✗ Error: Could not find required files!")
-        print("  Please specify: --checkpoint, --val_data, --tokenizer")
         return
     
-    print(f"Configuration:")
-    print(f"  Checkpoint: {args.checkpoint}")
-    print(f"  Validation data: {args.val_data}")
-    print(f"  Tokenizer: {args.tokenizer}")
-    print(f"  Number of samples: {args.num_samples}")
-    print(f"  Device: {args.device}")
     
-    # Load tokenizer
-    print(f"\n[1/3] Loading tokenizer...")
+
     tok = Tokenizer.ld(args.tokenizer)
     vocab_size = len(tok.w2i)
     pad_idx = tok.w2i['<PAD>']
-    print(f"  ✓ Vocabulary size: {vocab_size:,}")
-    
-    # Load validation data
-    print(f"\n[2/3] Loading validation data...")
     val_token_ids = load_prep_data(args.val_data)
     
     val_texts = []
@@ -329,10 +295,7 @@ def main():
         text = tok.dec(token_ids)
         if len(text.split()) > 5:
             val_texts.append(text)
-    print(f"  ✓ Validation samples: {len(val_texts):,}")
-    
-    # Load model
-    print(f"\n[3/3] Loading model...")
+
     ckpt = torch.load(args.checkpoint, map_location=args.device)
     
     if isinstance(ckpt, dict):
@@ -342,57 +305,38 @@ def main():
         state_dict = ckpt
         cfg = {}
     
-    # Use your actual model configuration from train.py
     model = Trans(
         vocab_size=vocab_size,
-        d_model=cfg.get('d_model', 300),      # Matches train.py
-        n_l=cfg.get('num_layers', 3),         # Matches train.py
-        n_heads=cfg.get('num_heads', 10),     # Matches train.py
-        d_ff=cfg.get('d_ff', 2048),           # Matches train.py
-        mx_sq_len=cfg.get('max_seq_len', 64), # Matches train.py
-        dropout=cfg.get('dropout', 0.3),      # Matches train.py
+        d_model=cfg.get('d_model', 300),      
+        n_l=cfg.get('num_layers', 3),         
+        n_heads=cfg.get('num_heads', 10),     
+        d_ff=cfg.get('d_ff', 2048),           
+        mx_sq_len=cfg.get('max_seq_len', 64), 
+        dropout=cfg.get('dropout', 0.3),      
         pad_idx=pad_idx
     )
     
     model.load_state_dict(state_dict, strict=True)
     model = model.to(args.device)
     model.eval()
-    print(f"  ✓ Model loaded (d_model={cfg.get('d_model', 300)}, layers={cfg.get('num_layers', 3)}, heads={cfg.get('num_heads', 10)})")
-    
-    # Create save directory
+
     Path(args.save_dir).mkdir(exist_ok=True, parents=True)
     
-    # Evaluation
-    print(f"\n{'='*100}")
-    print(f"Running evaluation on {min(args.num_samples, len(val_texts))} samples...")
-    print(f"{'='*100}\n")
     
     results = eval_on_val(model, tok, val_texts, 
                          min(args.num_samples, len(val_texts)), args.device, pad_idx)
     
-    # Save results
     with open(Path(args.save_dir) / 'evaluation_results.pkl', 'wb') as f:
         pickle.dump(results, f)
-    print(f"\n✓ Results saved to {args.save_dir}/evaluation_results.pkl")
     
-    # Generate EXACTLY 5 sample outputs with stochastic sampling
     gen_samp_outs(model, tok, val_texts, args.device)
     
-    # Attention visualization
     if not args.skip_attention:
         analyze_attn_pats(model, tok, results['attention_samples'],
                          str(Path(args.save_dir) / 'visualizations'), args.device)
     
-    # Final summary
-    print(f"\n{'='*100}")
-    print(f"{'':>42}FINAL RESULTS")
-    print(f"{'='*100}")
     print(f"  Perplexity: {results['avg_perplexity']:.2f}")
-    print(f"  BLEU Score: {results['bleu_score']:.4f}")
     print(f"  Samples Generated: {len(results['predictions'])}/{args.num_samples}")
-    print(f"  Stochastic Samples Shown: 5")
-    print(f"{'='*100}\n")
-
-
+ 
 if __name__ == '__main__':
     main()

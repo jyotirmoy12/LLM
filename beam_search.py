@@ -20,26 +20,21 @@ class BeamSearchDecoder:
         self.bw = beam_width
     
     def _get_ngrams_fast(self, token_ids: list, n: int) -> Set[Tuple]:
-        """Optimized n-gram extraction"""
         if len(token_ids) < n:
             return set()
         return set(tuple(token_ids[i:i+n]) for i in range(len(token_ids) - n + 1))
     
     def _block_ngrams_batch(self, sequences: list, logits: torch.Tensor, 
                             no_repeat_ngram_size: int) -> torch.Tensor:
-        """Vectorized n-gram blocking"""
         if no_repeat_ngram_size <= 0:
             return logits
         
         for i, seq in enumerate(sequences):
             if len(seq) < no_repeat_ngram_size:
                 continue
-            
-            # Get existing n-grams
             ngrams = self._get_ngrams_fast(seq, no_repeat_ngram_size)
             prefix_ngrams = self._get_ngrams_fast(seq, no_repeat_ngram_size - 1)
-            
-            # Block tokens that would create repeated n-grams
+
             for prefix in prefix_ngrams:
                 for tok_id in range(logits.size(-1)):
                     if prefix + (tok_id,) in ngrams:
@@ -61,7 +56,6 @@ class BeamSearchDecoder:
         device = input_ids.device
         batch_size = 1
         
-        # Initialize beams
         beams = [input_ids[0].tolist()]
         beam_scores = torch.zeros(1, device=device)
         
@@ -75,11 +69,9 @@ class BeamSearchDecoder:
             if early_stopping and len(finished_beams) >= self.bw:
                 break
             
-            # Batch all current beams
             beam_tensors = [torch.LongTensor(beam).to(device) for beam in beams]
             max_len = max(len(b) for b in beam_tensors)
             
-            # Pad sequences for batching
             padded_beams = []
             for beam in beam_tensors:
                 if len(beam) < max_len:
@@ -90,36 +82,28 @@ class BeamSearchDecoder:
             
             batch_input = torch.stack(padded_beams)
             
-            # Single batched forward pass (KEY OPTIMIZATION)
             with torch.no_grad():
                 logits = self.mdl(batch_input)
                 next_logits = logits[:, -1, :] / temperature
-            
-            # Apply n-gram blocking
+    
             if no_repeat_ngram_size > 0:
                 next_logits = self._block_ngrams_batch(beams, next_logits, no_repeat_ngram_size)
-            
-            # Get log probabilities
+        
             log_probs = F.log_softmax(next_logits, dim=-1)
-            
-            # Expand beams
+    
             vocab_size = log_probs.size(-1)
-            
-            # Get top-k tokens for each beam (reduced from bw*2 to bw)
+        
             k = min(self.bw, vocab_size)
             top_log_probs, top_indices = torch.topk(log_probs, k, dim=-1)
-            
-            # Calculate candidate scores
+        
             candidate_scores = beam_scores.unsqueeze(1) + top_log_probs
             candidate_scores = candidate_scores.view(-1)
-            
-            # Get top beam_width candidates
+        
             top_cand_scores, top_cand_indices = torch.topk(
                 candidate_scores, 
-                min(self.bw * 2, len(candidate_scores))  # Reduced multiplier
+                min(self.bw * 2, len(candidate_scores))  
             )
-            
-            # Decode indices back to beam and token
+        
             beam_indices = top_cand_indices // k
             token_indices = top_cand_indices % k
             
@@ -130,13 +114,11 @@ class BeamSearchDecoder:
                 beam_idx = beam_idx.item()
                 token_idx = token_idx.item()
                 
-                # Get actual token from top_k selection
                 actual_token = top_indices[beam_idx, token_idx].item()
                 
                 new_beam = beams[beam_idx] + [actual_token]
                 
                 if actual_token == eos_token_id:
-                    # Finished beam
                     norm_score = score.item() / (len(new_beam) ** length_penalty)
                     finished_beams.append(new_beam)
                     finished_scores.append(norm_score)
@@ -149,8 +131,7 @@ class BeamSearchDecoder:
             
             beams = new_beams
             beam_scores = torch.tensor(new_scores, device=device)
-        
-        # Add remaining beams to finished
+
         for beam, score in zip(beams, beam_scores):
             norm_score = score.item() / (len(beam) ** length_penalty)
             finished_beams.append(beam)
@@ -171,16 +152,7 @@ def eval_beam(model, tok, val_texts, beam_widths=[5],
     results = {}
     eval_configs = [1] + beam_widths
     
-    print(f"\n{'='*70}")
-    print(f"BEAM SEARCH EVALUATION (OPTIMIZED)")
-    print(f"{'='*70}\n")
-    
     for bw in eval_configs:
-        print(f"\n{'='*70}")
-        print(f"Beam Width: {bw}")
-        if bw > 1:
-            print(f"  length_penalty={length_penalty}, no_repeat_ngram={no_repeat_ngram_size}")
-        print(f"{'='*70}")
         
         decoder = BeamSearchDecoder(model, beam_width=bw)
         
@@ -229,36 +201,18 @@ def eval_beam(model, tok, val_texts, beam_widths=[5],
             elapsed = time.time() - start_time
             indiv_times.append(elapsed)
             
-            # Decode only the generated continuation (exclude prompt)
             gen_continuation_ids = gen_ids[len(prompt_ids):].tolist()
             gen_txt = tok.dec(gen_continuation_ids)
             preds.append(gen_txt)
-            refs.append([ground_truth])  # List of reference strings
+            refs.append([ground_truth]) 
             
             num_toks = len(gen_continuation_ids)
             total_tokens += num_toks
             total_time += elapsed
             
-            # Diagnostic: print first sample details
-            if idx == 0:
-                print(f"\n  --- Sample 1 Details ---")
-                print(f"  Generated ({len(gen_continuation_ids)} tokens, {len(gen_txt.split())} words): {gen_txt[:100]}...")
-                print(f"  Reference ({len(reference_continuation_ids)} tokens, {len(ground_truth.split())} words): {ground_truth[:100]}...")
-                print(f"  ------------------------\n")
-            
-            print(f"  Sample {idx + 1}: {num_toks} tokens, {elapsed:.3f}s, gen_len={len(gen_continuation_ids)}, ref_len={len(reference_continuation_ids)}")
-        
         tps = total_tokens / total_time if total_time > 0 else 0
         bleu_res = bleu_metric.compute(predictions=preds, references=refs)
-        
-        # Diagnostic: Print BLEU components
-        print(f"\n  BLEU Components:")
-        print(f"    Precisions: {[f'{p:.4f}' for p in bleu_res['precisions']]}")
-        print(f"    Brevity Penalty: {bleu_res['brevity_penalty']:.4f}")
-        print(f"    Length Ratio: {bleu_res['length_ratio']:.4f}")
-        print(f"    Translation Length: {bleu_res['translation_length']}")
-        print(f"    Reference Length: {bleu_res['reference_length']}")
-        
+    
         results[bw] = {
             'bleu': bleu_res['bleu'],
             'bleu_1': bleu_res['precisions'][0] * 100,
@@ -273,7 +227,6 @@ def eval_beam(model, tok, val_texts, beam_widths=[5],
             'references': refs
         }
         
-        print(f"\n  Results: BLEU={bleu_res['bleu']:.4f}, Speed={tps:.1f} tok/s\n")
     
     return results
 
@@ -326,17 +279,12 @@ def vis_res(results, save_path='beam_search_results'):
     save_file = Path(save_path) / 'beam_search_comparison.png'
     plt.savefig(save_file, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"\n✓ Visualization saved to {save_file}")
     return fig
 
 
 def print_res_tbl(results):
-    print(f"\n{'='*90}")
-    print(f"{'':>28}BEAM SEARCH EVALUATION RESULTS")
-    print(f"{'='*90}\n")
-    
     print(f"{'Beam':<8} {'BLEU':<10} {'BLEU-1':<10} {'BLEU-4':<10} {'Speed (tok/s)':<15} {'Time (s)':<10}")
-    print(f"{'-'*90}")
+
     
     bws = sorted(results.keys())
     
@@ -346,33 +294,7 @@ def print_res_tbl(results):
         print(f"{beam_label:<8} {res['bleu']:<10.4f} {res['bleu_1']:<10.2f} {res['bleu_4']:<10.2f} "
               f"{res['tokens_per_second']:<15.1f} {res['total_time']:<10.2f}")
     
-    print(f"{'='*90}\n")
     
-    # Analysis
-    if len(bws) > 1:
-        print(f"{'='*90}")
-        print(f"{'':>38}ANALYSIS")
-        print(f"{'='*90}\n")
-        
-        best_bw = max(bws, key=lambda x: results[x]['bleu'])
-        improvement = ((results[best_bw]['bleu'] - results[1]['bleu']) / results[1]['bleu'] * 100)
-        speedup = results[1]['tokens_per_second'] / results[best_bw]['tokens_per_second']
-        
-        print(f"  Best Beam Width: {best_bw}")
-        print(f"    • BLEU Score: {results[best_bw]['bleu']:.4f}")
-        print(f"    • BLEU improvement over greedy: {improvement:+.1f}%")
-        print(f"    • Speed reduction: {speedup:.1f}x slower than greedy")
-        
-        print(f"\n  Greedy Search (k=1):")
-        print(f"    • BLEU Score: {results[1]['bleu']:.4f}")
-        print(f"    • Speed: {results[1]['tokens_per_second']:.1f} tokens/s")
-        
-        print(f"\n  Key Findings:")
-        print(f"    • Beam search improves quality by exploring multiple paths")
-        print(f"    • Trade-off: Better quality at the cost of slower inference")
-        print(f"    • Optimal beam width balances quality and speed")
-        
-        print(f"\n{'='*90}\n")
 
 
 def find_files():
@@ -423,52 +345,24 @@ def main():
                         help='Directory to save results')
     args = parser.parse_args()
     
-    print(f"\n{'='*70}")
-    print(f"{'':>18}OPTIMIZED BEAM SEARCH EXPERIMENT")
-    print(f"{'='*70}\n")
     
-    # Auto-find files if not provided
     if args.checkpoint is None or args.val_data is None or args.tokenizer is None:
-        print("Searching for required files...")
         model_path, data_path, tokenizer_path = find_files()
         
         args.checkpoint = args.checkpoint or model_path
         args.val_data = args.val_data or data_path
         args.tokenizer = args.tokenizer or tokenizer_path
-    
-    if args.checkpoint is None or args.val_data is None or args.tokenizer is None:
-        print("\n✗ Error: Could not find required files!")
-        print("  Please specify: --checkpoint, --val_data, --tokenizer")
-        return
-    
-    print(f"Configuration:")
-    print(f"  Checkpoint: {args.checkpoint}")
-    print(f"  Validation data: {args.val_data}")
-    print(f"  Tokenizer: {args.tokenizer}")
-    print(f"  Beam widths: {args.beam_widths}")
-    print(f"  Number of samples: {args.num_samples}")
-    print(f"  Length penalty: {args.length_penalty}")
-    print(f"  No-repeat n-gram: {args.no_repeat_ngram}")
-    print(f"  Device: {args.device}")
-    
-    # Load tokenizer
-    print(f"\n[1/3] Loading tokenizer...")
+
     tok = Tokenizer.ld(args.tokenizer)
     vocab_size = len(tok.w2i)
     pad_idx = tok.w2i['<PAD>']
-    print(f"  ✓ Vocabulary size: {vocab_size:,}")
-    
-    # Load validation data
-    print(f"\n[2/3] Loading validation data...")
+   
     with open(args.val_data, 'rb') as f:
         val_token_ids = pickle.load(f)
     
     val_texts = [tok.dec(ids) for ids in val_token_ids[:args.num_samples * 3]
                  if len(tok.dec(ids).split()) > 5][:args.num_samples * 2]
-    print(f"  ✓ Validation samples: {len(val_texts):,}")
     
-    # Load model
-    print(f"\n[3/3] Loading model...")
     ckpt = torch.load(args.checkpoint, map_location=args.device)
     state_dict = ckpt.get('model_state_dict', ckpt)
     cfg = ckpt.get('config', {})
@@ -487,7 +381,7 @@ def main():
     model.load_state_dict(state_dict, strict=True)
     model = model.to(args.device)
     model.eval()
-    print(f"  ✓ Model loaded (d_model={cfg.get('d_model', 300)}, layers={cfg.get('num_layers', 3)}, heads={cfg.get('num_heads', 10)})")
+   
     
     # Run evaluation
     results = eval_beam(
@@ -509,12 +403,6 @@ def main():
     Path(args.save_dir).mkdir(exist_ok=True, parents=True)
     with open(Path(args.save_dir) / 'beam_search_results.pkl', 'wb') as f:
         pickle.dump(results, f)
-    print(f"✓ Results saved to {args.save_dir}/beam_search_results.pkl")
-    
-    print(f"\n{'='*70}")
-    print(f"{'':>25}EXPERIMENT COMPLETE!")
-    print(f"{'='*70}\n")
-
 
 if __name__ == '__main__':
     main()

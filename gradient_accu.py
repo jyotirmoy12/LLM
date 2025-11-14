@@ -74,12 +74,6 @@ def run_grad_accum_exp(
     
     for accum_steps in accum_steps_list:
         eff_bs = batch_size * accum_steps
-        
-        print(f"\n{'='*70}")
-        print(f"Configuration: Accumulation Steps = {accum_steps}")
-        print(f"  Mini-batch Size: {batch_size}")
-        print(f"  Effective Batch Size: {eff_bs}")
-        print(f"{'='*70}")
       
         # Create independent model copy for this experiment
         model_copy = copy.deepcopy(base_model)
@@ -127,9 +121,6 @@ def run_grad_accum_exp(
             'final_loss': epoch_losses[-1]
         }
         
-        print(f"\n  Summary for Accum Steps = {accum_steps}:")
-        print(f"    Final Loss: {epoch_losses[-1]:.4f}")
-        print(f"    Avg Epoch Time: {results[accum_steps]['avg_epoch_time']:.2f}s")
     
     return results
 
@@ -169,8 +160,7 @@ def plot_res(results, save_dir):
     plt.tight_layout()
     plt.savefig(Path(save_dir) / 'loss_curves.png', dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"\n✓ Loss curves saved to {save_dir}/loss_curves.png")
-    
+
     # Plot 2: Runtime Comparison
     fig, ax = plt.subplots(figsize=(11, 7))
     
@@ -208,56 +198,12 @@ def plot_res(results, save_dir):
     plt.tight_layout()
     plt.savefig(Path(save_dir) / 'runtime_comparison.png', dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"✓ Runtime comparison saved to {save_dir}/runtime_comparison.png")
-    
-    # Plot 3: Combined Analysis
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-    
-    final_losses = [results[steps]['final_loss'] for steps in accum_steps_list]
-    bars1 = ax1.bar(x_pos, final_losses, color=colors[:len(accum_steps_list)], 
-                    alpha=0.7, edgecolor='black', linewidth=2, width=0.6)
-    
-    for bar, loss_val in zip(bars1, final_losses):
-        height = bar.get_height()
-        ax1.text(bar.get_x() + bar.get_width()/2., height,
-                f'{loss_val:.4f}',
-                ha='center', va='bottom', fontsize=11, fontweight='bold')
-    
-    ax1.set_xlabel('Configuration', fontsize=13, fontweight='bold')
-    ax1.set_ylabel('Final Loss', fontsize=13, fontweight='bold')
-    ax1.set_title('Final Loss Comparison', fontsize=14, fontweight='bold')
-    ax1.set_xticks(x_pos)
-    ax1.set_xticklabels(labels, fontsize=10, fontweight='bold')
-    ax1.grid(True, alpha=0.3, axis='y', linestyle='--')
-    
-    ax2.scatter(avg_times, final_losses, s=300, c=colors[:len(accum_steps_list)],
-               alpha=0.6, edgecolors='black', linewidth=2)
-    
-    for i, (steps, time_val, loss_val) in enumerate(zip(accum_steps_list, avg_times, final_losses)):
-        label = f'Accum={steps}' if steps > 1 else 'Baseline'
-        ax2.annotate(label, (time_val, loss_val), 
-                    xytext=(10, 10), textcoords='offset points',
-                    fontsize=11, fontweight='bold',
-                    bbox=dict(boxstyle='round,pad=0.5', facecolor=colors[i], alpha=0.3))
-    
-    ax2.set_xlabel('Avg Epoch Time (seconds)', fontsize=13, fontweight='bold')
-    ax2.set_ylabel('Final Loss', fontsize=13, fontweight='bold')
-    ax2.set_title('Time-Loss Trade-off', fontsize=14, fontweight='bold')
-    ax2.grid(True, alpha=0.3, linestyle='--')
-    
-    plt.tight_layout()
-    plt.savefig(Path(save_dir) / 'combined_analysis.png', dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"✓ Combined analysis saved to {save_dir}/combined_analysis.png")
-
+   
 
 def print_res_tbl(results):
-    print(f"\n{'='*90}")
-    print(f"GRADIENT ACCUMULATION EXPERIMENT RESULTS")
-    print(f"{'='*90}\n")
+
     
     print(f"{'Config':<20} | {'Mini-BS':<10} | {'Eff. BS':<10} | {'Final Loss':<12} | {'Avg Time/Epoch':<15}")
-    print(f"{'-'*90}")
     
     baseline_time = results[1]['avg_epoch_time']
     
@@ -271,9 +217,6 @@ def print_res_tbl(results):
         
         print(f"{cfg:<20} | {mini_bs:<10} | {eff_bs:<10} | {final_loss:<12.4f} | {avg_time:<15.2f}s")
     
-    print(f"\n{'='*90}")
-    print(f"DETAILED ANALYSIS")
-    print(f"{'='*90}")
     
     print("\n  Loss Convergence:")
     for accum_steps in sorted(results.keys()):
@@ -290,8 +233,7 @@ def print_res_tbl(results):
         overhead = ((res['avg_epoch_time'] - baseline_time) / baseline_time * 100)
         print(f"    • {cfg:15s}: {res['avg_epoch_time']:.2f}s per epoch "
               f"({overhead:+.1f}% vs baseline)")
-    
-    print(f"\n{'='*90}\n")
+
 
 
 def find_files():
@@ -340,36 +282,13 @@ def main():
     parser.add_argument('--save_dir', type=str, default='grad_accum_results', help='Directory to save results')
     args = parser.parse_args()
     
-    # Auto-find files if not provided
     if args.checkpoint is None or args.train_data is None or args.tokenizer is None:
-        print("Searching for required files...")
         model_path, data_path, tokenizer_path = find_files()
         
         args.checkpoint = args.checkpoint or model_path
         args.train_data = args.train_data or data_path
         args.tokenizer = args.tokenizer or tokenizer_path
-    
-    if args.checkpoint is None or args.train_data is None or args.tokenizer is None:
-        print("\n❌ Error: Could not find required files!")
-        print("Please provide:")
-        print("  --checkpoint: path to model checkpoint")
-        print("  --train_data: path to training data")
-        print("  --tokenizer: path to tokenizer")
-        return
-    
-    print(f"\n{'='*70}")
-    print(f"GRADIENT ACCUMULATION EXPERIMENT CONFIGURATION")
-    print(f"{'='*70}")
-    print(f"  Checkpoint: {args.checkpoint}")
-    print(f"  Train data: {args.train_data}")
-    print(f"  Tokenizer: {args.tokenizer}")
-    print(f"  Mini-batch size (fixed): {args.batch_size}")
-    print(f"  Accumulation steps to test: {args.accum_steps}")
-    print(f"  Epochs per experiment: {args.num_epochs}")
-    print(f"  Device: {args.device}")
-    print(f"  Results directory: {args.save_dir}")
-    
-    # Import your model classes
+        
     from Embedding import Tokenizer
     from model import Trans
     
@@ -377,9 +296,7 @@ def main():
     tok = Tokenizer.ld(args.tokenizer)
     vocab_size = len(tok.w2i)
     pad_idx = tok.w2i['<PAD>']
-    
-    print(f"  Vocabulary size: {vocab_size}")
-    print(f"  PAD index: {pad_idx}")
+
     
     # Load training data
     with open(args.train_data, 'rb') as f:
@@ -387,14 +304,11 @@ def main():
     
     original_size = len(train_token_ids)
     
-    # USE SUBSET OF DATA FOR SPEED
     if args.data_subset > 0 and args.data_subset < original_size:
         train_token_ids = train_token_ids[:args.data_subset]
-        print(f"  Training samples: {len(train_token_ids)} (subset of {original_size} for speed)")
     else:
         print(f"  Training samples: {len(train_token_ids)} (full dataset)")
     
-    print(f"{'='*70}\n")
     
     # Load checkpoint
     ckpt = torch.load(args.checkpoint, map_location='cpu')
@@ -406,7 +320,6 @@ def main():
         state_dict = ckpt
         cfg = {}
     
-    # Create base model
     base_model = Trans(
         vocab_size=vocab_size,
         d_model=cfg.get('d_model', 300),
@@ -419,7 +332,7 @@ def main():
     )
     
     base_model.load_state_dict(state_dict, strict=True)
-    print("✓ Model loaded successfully\n")
+
     
     # Run experiments
     results = run_grad_accum_exp(
@@ -442,11 +355,6 @@ def main():
     # Save results
     with open(Path(args.save_dir) / 'results.pkl', 'wb') as f:
         pickle.dump(results, f)
-    print(f"✓ Results saved to {args.save_dir}/results.pkl")
-    
-    print(f"\n{'='*70}")
-    print(f"EXPERIMENT COMPLETE!")
-    print(f"{'='*70}\n")
     
 if __name__ == '__main__':
     main()
